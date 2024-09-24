@@ -1,0 +1,90 @@
+---
+name: Continuous Integration
+
+
+# Trigger this workflow manually, by pushing commits to any branch, or
+# by filing a pull request.
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the repository as of this commit and cache the
+      # working directory for use in other jobs or for re-use if
+      # re-running the workflow (e.g., something outside of GitHub
+      # Actions broke).
+      - id: cache-workdir
+        uses: actions/cache@v4
+        with:
+          key: workdir-${{ github.sha }}
+          path: .
+
+      # Python Semantic Release needs the history of all branches/tags
+      # to calculate the next version number and build the change log.
+      - if: steps.cache-workdir.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Fingerprint the source code.  Use this identifier instead of
+      # the commit ID to prevent non-code changes from altering
+      # builds.
+      - id: hash-source-code
+        run: |
+          echo "hash=$(find docs pyproject.toml src tests -type f -exec cat '{}' \; | sha512sum | awk '{print $1}')" >> $GITHUB_OUTPUT
+        shell: bash
+    outputs:
+      source-hash: ${{ steps.hash-source-code.outputs.hash }}
+
+
+  lint:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          key: workdir-${{ github.sha }}
+          path: .
+
+      # Install linter dependencies here; for example:
+      # - uses: opentofu/setup-opentofu@v1.0.2
+      # - uses: terraform-linters/setup-tflint@v4
+
+      # Double-check code syntax/style.  This ought to happen in a
+      # pre-commit hook, but not everyone may have that installed.
+      - uses: pre-commit/action@v3.0.1
+
+  docs:
+    needs:
+      - setup
+      - lint
+    runs-on: ubuntu-latest
+    permissions:
+      # Allow this job to push web content to the gh-pages branch.
+      contents: write
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          key: workdir-${{ github.sha }}
+          path: .
+      - uses: actions/setup-python@v5
+        with:
+          cache: pip
+
+      # Generate the documentation and publish it using GitHub Pages.
+      - run: make html
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          force_orphan: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/_build/html
